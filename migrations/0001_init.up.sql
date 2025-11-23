@@ -1,0 +1,43 @@
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(255) PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS teams (
+  name TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  team_name TEXT NOT NULL REFERENCES teams(name) ON DELETE CASCADE,
+  user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (team_name, user_id)
+);
+
+DO $$
+BEGIN
+  CREATE TYPE pr_status AS ENUM ('OPEN', 'MERGED');
+EXCEPTION
+  WHEN duplicate_object THEN null; 
+END$$;
+
+CREATE TABLE IF NOT EXISTS prs (
+  id VARCHAR(255) PRIMARY KEY,
+  title TEXT NOT NULL,
+  author_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  status pr_status NOT NULL DEFAULT 'OPEN',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS pr_reviewers (
+  pr_id VARCHAR(255) NOT NULL REFERENCES prs(id) ON DELETE CASCADE,
+  reviewer_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  assigned_from_team TEXT NOT NULL,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (pr_id, reviewer_id)
+);
