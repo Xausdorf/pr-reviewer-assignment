@@ -25,7 +25,12 @@ func NewUserRepository(pool *pgxpool.Pool, logger *log.Logger) repo.UserReposito
 }
 
 func (r *UserRepository) CreateOrUpdateUser(ctx context.Context, u *entity.User) error {
-	q := r.sb.Insert("users").Columns("id", "name", "is_active", "created_at").Values(u.ID, u.Name, u.IsActive, u.CreatedAt).Suffix("ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, is_active = EXCLUDED.is_active")
+	q := r.sb.
+		Insert("users").
+		Columns("id", "name", "is_active", "created_at").
+		Values(u.ID, u.Name, u.IsActive, u.CreatedAt).
+		Suffix("ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, is_active = EXCLUDED.is_active")
+
 	sql, args, _ := q.ToSql()
 	_, err := r.pool.Exec(ctx, sql, args...)
 	if err != nil {
@@ -35,7 +40,11 @@ func (r *UserRepository) CreateOrUpdateUser(ctx context.Context, u *entity.User)
 }
 
 func (r *UserRepository) SetIsActive(ctx context.Context, userID string, isActive bool) error {
-	q := r.sb.Update("users").Set("is_active", isActive).Where(sq.Eq{"id": userID})
+	q := r.sb.
+		Update("users").
+		Set("is_active", isActive).
+		Where(sq.Eq{"id": userID})
+
 	sql, args, _ := q.ToSql()
 	_, err := r.pool.Exec(ctx, sql, args...)
 	if err != nil {
@@ -45,9 +54,14 @@ func (r *UserRepository) SetIsActive(ctx context.Context, userID string, isActiv
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id string) (*entity.User, error) {
-	q := r.sb.Select("id", "name", "is_active", "created_at").From("users").Where(sq.Eq{"id": id})
+	q := r.sb.
+		Select("id", "name", "is_active", "created_at").
+		From("users").
+		Where(sq.Eq{"id": id})
+
 	sql, args, _ := q.ToSql()
 	row := r.pool.QueryRow(ctx, sql, args...)
+
 	var u entity.User
 	if err := row.Scan(&u.ID, &u.Name, &u.IsActive, &u.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

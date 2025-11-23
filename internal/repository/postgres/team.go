@@ -31,13 +31,21 @@ func (r *TeamRepository) CreateOrUpdateTeam(ctx context.Context, team *entity.Te
 	}
 	defer tx.Rollback(ctx)
 
-	q1 := r.sb.Insert("teams").Columns("name", "created_at").Values(team.Name, team.CreatedAt).Suffix("ON CONFLICT (name) DO NOTHING")
+	q1 := r.sb.
+		Insert("teams").
+		Columns("name", "created_at").
+		Values(team.Name, team.CreatedAt).
+		Suffix("ON CONFLICT (name) DO NOTHING")
+
 	sql1, args1, _ := q1.ToSql()
 	if _, err := tx.Exec(ctx, sql1, args1...); err != nil {
 		return err
 	}
 
-	q2 := r.sb.Delete("team_members").Where(sq.Eq{"team_name": team.Name})
+	q2 := r.sb.
+		Delete("team_members").
+		Where(sq.Eq{"team_name": team.Name})
+
 	sql2, args2, _ := q2.ToSql()
 	if _, err := tx.Exec(ctx, sql2, args2...); err != nil {
 		return err
@@ -50,14 +58,18 @@ func (r *TeamRepository) CreateOrUpdateTeam(ctx context.Context, team *entity.Te
 			return err
 		}
 	}
-
 	return tx.Commit(ctx)
 }
 
 func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team, []entity.TeamMember, error) {
-	q := r.sb.Select("name", "created_at").From("teams").Where(sq.Eq{"name": name})
+	q := r.sb.
+		Select("name", "created_at").
+		From("teams").
+		Where(sq.Eq{"name": name})
+
 	sql, args, _ := q.ToSql()
 	row := r.pool.QueryRow(ctx, sql, args...)
+
 	var team entity.Team
 	if err := row.Scan(&team.Name, &team.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -68,7 +80,11 @@ func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team
 		return nil, nil, err
 	}
 
-	q2 := r.sb.Select("team_name", "user_id").From("team_members").Where(sq.Eq{"team_name": name})
+	q2 := r.sb.
+		Select("team_name", "user_id").
+		From("team_members").
+		Where(sq.Eq{"team_name": name})
+
 	sql2, args2, _ := q2.ToSql()
 	rows, err := r.pool.Query(ctx, sql2, args2...)
 	if err != nil {
@@ -76,6 +92,7 @@ func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team
 		return &team, nil, err
 	}
 	defer rows.Close()
+
 	members := make([]entity.TeamMember, 0)
 	for rows.Next() {
 		var m entity.TeamMember
@@ -88,7 +105,11 @@ func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team
 }
 
 func (r *TeamRepository) GetTeamsForUser(ctx context.Context, userID string) ([]string, error) {
-	q := r.sb.Select("team_name").From("team_members").Where(sq.Eq{"user_id": userID})
+	q := r.sb.
+		Select("team_name").
+		From("team_members").
+		Where(sq.Eq{"user_id": userID})
+
 	sql, args, _ := q.ToSql()
 	rows, err := r.pool.Query(ctx, sql, args...)
 	if err != nil {
@@ -96,6 +117,7 @@ func (r *TeamRepository) GetTeamsForUser(ctx context.Context, userID string) ([]
 		return nil, err
 	}
 	defer rows.Close()
+
 	out := make([]string, 0)
 	for rows.Next() {
 		var tn string
