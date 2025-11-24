@@ -2,182 +2,108 @@ package usecase
 
 import (
 	"context"
-	"math/rand"
-	"time"
+	"errors"
 
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/apperror"
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/entity"
-	repo "github.com/Xausdorf/pr-reviewer-assignment/internal/repository"
 	log "github.com/sirupsen/logrus"
 )
 
-type PRService struct {
-	prRepo   repo.PRRepository
-	teamRepo repo.TeamRepository
-	userRepo repo.UserRepository
+const MaxReviewersCount = 2
+
+type PRUseCase struct {
+	prRepo   PRRepository
+	userRepo UserRepository
 	log      *log.Logger
 }
 
-func NewPRService(pr repo.PRRepository, team repo.TeamRepository, user repo.UserRepository, logger *log.Logger) *PRService {
-	return &PRService{prRepo: pr, teamRepo: team, userRepo: user, log: logger}
+func NewPRUseCase(pr PRRepository, user UserRepository, logger *log.Logger) *PRUseCase {
+	return &PRUseCase{prRepo: pr, userRepo: user, log: logger}
 }
 
-func (s *PRService) CreatePullRequest(ctx context.Context, pr *entity.PR) ([]string, error) {
-	if existing, _ := s.prRepo.GetByID(ctx, pr.ID); existing != nil {
-		return nil, apperror.ErrPRExists
-	}
-
-	teams, err := s.teamRepo.GetTeamsForUser(ctx, pr.AuthorID)
+func (s *PRUseCase) CreatePullRequest(ctx context.Context, pr entity.PR) ([]string, error) {
+	s.log.WithFields(log.Fields{
+		"prID":     pr.ID,
+		"prName":   pr.Title,
+		"authorID": pr.AuthorID,
+	}).Info("PRUseCase - creating pull request")
+	author, err := s.userRepo.GetByID(ctx, pr.AuthorID)
 	if err != nil {
 		return nil, err
-	}
-	if len(teams) == 0 {
-		if err := s.prRepo.Create(ctx, pr); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
-
-	teamName := teams[0]
-	team, members, err := s.teamRepo.GetTeam(ctx, teamName)
-	if err != nil {
-		return nil, err
-	}
-
-	candidates := make([]string, 0, len(members))
-	for _, m := range members {
-		if m.UserID == pr.AuthorID {
-			continue
-		}
-		u, err := s.userRepo.GetByID(ctx, m.UserID)
-		if err != nil {
-			continue
-		}
-		if u.IsActive {
-			candidates = append(candidates, m.UserID)
-		}
 	}
 
 	if err := s.prRepo.Create(ctx, pr); err != nil {
 		return nil, err
 	}
 
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-
-	rand.Shuffle(len(candidates), func(i, j int) {
-		candidates[i], candidates[j] = candidates[j], candidates[i]
-	})
-	n := 2
-	if len(candidates) < n {
-		n = len(candidates)
-	}
-	selected := candidates[:n]
-
-	now := time.Now().UTC()
-	for _, rid := range selected {
-		rv := &entity.PRReviewer{PRID: pr.ID, ReviewerID: rid, AssignedFromTeam: team.Name, AssignedAt: now}
-		if err := s.prRepo.AddReviewer(ctx, rv); err != nil {
-			s.log.WithError(err).WithField("pr", pr.ID).Error("failed to add reviewer")
+	assigned := make([]string, 0, MaxReviewersCount)
+	for i := 0; i < MaxReviewersCount; i++ {
+		reviewerID, err := s.prRepo.AssignReviewer(ctx, pr.ID, author.TeamName)
+		if errors.Is(err, apperror.ErrNoCandidate) {
+			break
 		}
+		if err != nil {
+			_ = s.prRepo.DeleteByID(ctx, pr.ID)
+			return nil, err
+		}
+		assigned = append(assigned, reviewerID)
 	}
 
-	return selected, nil
+	return assigned, nil
 }
 
-func (s *PRService) MergePullRequest(ctx context.Context, prID string) (*entity.PR, error) {
+func (s *PRUseCase) MergePullRequest(ctx context.Context, prID string) (*entity.PR, error) {
+	s.log.WithField("prID", prID).Info("PRUseCase - merging pull request")
 	pr, err := s.prRepo.GetByID(ctx, prID)
 	if err != nil {
-		return nil, apperror.ErrNotFound
+		return nil, err
 	}
-	if pr.Status == "MERGED" {
+	if pr.Status == entity.PRStatusMerged {
 		return pr, nil
 	}
-	if err := s.prRepo.UpdateStatus(ctx, prID, "MERGED"); err != nil {
-		return nil, err
-	}
-	updated, err := s.prRepo.GetByID(ctx, prID)
-	if err != nil {
-		return nil, err
-	}
-	return updated, nil
+
+	return s.prRepo.UpdateStatus(ctx, prID, entity.PRStatusMerged)
 }
 
-func (s *PRService) ReassignReviewer(ctx context.Context, prID, oldUserID, newUserID string) (string, []string, error) {
+func (s *PRUseCase) ReassignReviewer(ctx context.Context, prID, oldUserID string) (string, *entity.PR, error) {
+	s.log.WithFields(log.Fields{
+		"prID":      prID,
+		"oldUserID": oldUserID,
+	}).Info("PRUseCase - reassigning reviewer")
 	pr, err := s.prRepo.GetByID(ctx, prID)
 	if err != nil {
-		return "", nil, apperror.ErrNotFound
+		return "", nil, err
 	}
-	if pr.Status == "MERGED" {
+	if pr.Status == entity.PRStatusMerged {
 		return "", nil, apperror.ErrPRMerged
 	}
 
-	reviewers, err := s.prRepo.ListReviewers(ctx, prID)
+	oldUser, err := s.userRepo.GetByID(ctx, oldUserID)
 	if err != nil {
 		return "", nil, err
 	}
-	var found bool
-	var fromTeam string
-	assigned := map[string]struct{}{}
-	for _, r := range reviewers {
-		assigned[r.ReviewerID] = struct{}{}
-		if r.ReviewerID == oldUserID {
-			found = true
-			fromTeam = r.AssignedFromTeam
-		}
+
+	isAssigned, err := s.userRepo.IsAssignedToPR(ctx, oldUserID, prID)
+	if err != nil {
+		return "", nil, err
 	}
-	if !found {
+	if !isAssigned {
 		return "", nil, apperror.ErrNotAssigned
 	}
 
-	_, members, err := s.teamRepo.GetTeam(ctx, fromTeam)
+	newUserID, err := s.prRepo.AssignReviewer(ctx, prID, oldUser.TeamName)
 	if err != nil {
 		return "", nil, err
 	}
-	candidates := make([]string, 0)
-	for _, m := range members {
-		if m.UserID == oldUserID {
-			continue
-		}
-		if _, ok := assigned[m.UserID]; ok {
-			continue
-		}
-		u, err := s.userRepo.GetByID(ctx, m.UserID)
-		if err != nil {
-			continue
-		}
-		if u.IsActive {
-			candidates = append(candidates, m.UserID)
-		}
-	}
-	if len(candidates) == 0 {
-		return "", nil, apperror.ErrNoCandidate
-	}
-	newID := candidates[rand.Intn(len(candidates))]
-
 	if err := s.prRepo.RemoveReviewer(ctx, prID, oldUserID); err != nil {
+		_ = s.prRepo.RemoveReviewer(ctx, prID, newUserID)
 		return "", nil, err
 	}
-	now := time.Now().UTC()
-	if err := s.prRepo.AddReviewer(ctx, &entity.PRReviewer{PRID: prID, ReviewerID: newID, AssignedFromTeam: fromTeam, AssignedAt: now}); err != nil {
-		return "", nil, err
-	}
-	revs, err := s.prRepo.ListReviewers(ctx, prID)
-	if err != nil {
-		return newID, nil, nil
-	}
-	ids := make([]string, 0, len(revs))
-	for _, r := range revs {
-		ids = append(ids, r.ReviewerID)
-	}
-	return newID, ids, nil
+
+	return newUserID, pr, nil
 }
 
-func (s *PRService) GetAssignedTo(ctx context.Context, userID string) ([]*entity.PR, error) {
-	return s.prRepo.ListAssignedTo(ctx, userID)
-}
-
-func (s *PRService) GetByID(ctx context.Context, prID string) (*entity.PR, error) {
-	return s.prRepo.GetByID(ctx, prID)
+func (s *PRUseCase) GetAssignedReviewers(ctx context.Context, prID string) (assignedIDs []string, err error) {
+	s.log.WithField("prID", prID).Info("PRUseCase - getting assigned reviewers")
+	return s.prRepo.GetAssignedReviewers(ctx, prID)
 }

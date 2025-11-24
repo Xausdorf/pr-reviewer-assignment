@@ -3,129 +3,119 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/apperror"
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/entity"
-	repo "github.com/Xausdorf/pr-reviewer-assignment/internal/repository"
 )
 
 type TeamRepository struct {
 	pool *pgxpool.Pool
 	sb   sq.StatementBuilderType
-	log  *log.Logger
 }
 
-func NewTeamRepository(pool *pgxpool.Pool, logger *log.Logger) repo.TeamRepository {
-	return &TeamRepository{pool: pool, sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar), log: logger}
+func NewTeamRepository(pool *pgxpool.Pool) *TeamRepository {
+	return &TeamRepository{pool: pool, sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar)}
 }
 
-func (r *TeamRepository) CreateOrUpdateTeam(ctx context.Context, team *entity.Team, members []entity.TeamMember) error {
+func (r *TeamRepository) CreateTeam(ctx context.Context, team entity.Team, members []entity.User) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	q1 := r.sb.
+	query := r.sb.
 		Insert("teams").
 		Columns("name", "created_at").
-		Values(team.Name, team.CreatedAt).
-		Suffix("ON CONFLICT (name) DO NOTHING")
+		Values(team.Name, team.CreatedAt)
 
-	sql1, args1, _ := q1.ToSql()
-	if _, err := tx.Exec(ctx, sql1, args1...); err != nil {
-		return err
+	if _, err := tryExec(query, tx, ctx); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return apperror.ErrTeamExists
+		}
+		return fmt.Errorf("TeamRepository.CreateTeam failed to insert team: %w", err)
 	}
 
-	q2 := r.sb.
-		Delete("team_members").
-		Where(sq.Eq{"team_name": team.Name})
+	if len(members) > 0 {
+		queryAddUsers := r.sb.
+			Insert("users").
+			Columns("id", "team_name", "name", "is_active", "created_at")
 
-	sql2, args2, _ := q2.ToSql()
-	if _, err := tx.Exec(ctx, sql2, args2...); err != nil {
-		return err
-	}
+		for _, m := range members {
+			queryAddUsers = queryAddUsers.Values(m.ID, team.Name, m.Name, m.IsActive, m.CreatedAt)
+		}
+		queryAddUsers = queryAddUsers.Suffix("ON CONFLICT (id) DO UPDATE SET " +
+			"team_name = EXCLUDED.team_name, name = EXCLUDED.name, is_active = EXCLUDED.is_active")
 
-	for _, m := range members {
-		q := r.sb.Insert("team_members").Columns("team_name", "user_id").Values(m.TeamName, m.UserID)
-		sql, args, _ := q.ToSql()
-		if _, err := tx.Exec(ctx, sql, args...); err != nil {
-			return err
+		if _, err := tryExec(queryAddUsers, tx, ctx); err != nil {
+			return fmt.Errorf("TeamRepository.CreateTeam failed to insert or update team members: %w", err)
 		}
 	}
+
 	return tx.Commit(ctx)
 }
 
-func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team, []entity.TeamMember, error) {
-	q := r.sb.
+func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team, []entity.User, error) {
+	query := r.sb.
 		Select("name", "created_at").
 		From("teams").
 		Where(sq.Eq{"name": name})
 
-	sql, args, _ := q.ToSql()
-	row := r.pool.QueryRow(ctx, sql, args...)
+	row := tryQueryRow(query, r.pool, ctx)
 
 	var team entity.Team
 	if err := row.Scan(&team.Name, &team.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			r.log.WithField("team", name).Debug("team not found")
 			return nil, nil, apperror.ErrNotFound
 		}
-		r.log.WithError(err).WithField("team", name).Error("failed to scan team")
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("TeamRepository.GetTeam failed to select team: %w", err)
 	}
 
-	q2 := r.sb.
-		Select("team_name", "user_id").
-		From("team_members").
+	queryUsers := r.sb.
+		Select("id", "team_name", "name", "is_active", "created_at").
+		From("users").
 		Where(sq.Eq{"team_name": name})
 
-	sql2, args2, _ := q2.ToSql()
-	rows, err := r.pool.Query(ctx, sql2, args2...)
+	rows, err := tryQuery(queryUsers, r.pool, ctx)
 	if err != nil {
-		r.log.WithError(err).WithField("team", name).Error("failed to query team members")
-		return &team, nil, err
+		return &team, nil, fmt.Errorf("TeamRepository.GetTeam failed to select team members: %w", err)
 	}
 	defer rows.Close()
 
-	members := make([]entity.TeamMember, 0)
+	users := make([]entity.User, 0)
 	for rows.Next() {
-		var m entity.TeamMember
-		if err := rows.Scan(&m.TeamName, &m.UserID); err != nil {
-			return &team, nil, err
+		var u entity.User
+		if err := rows.Scan(&u.ID, &u.TeamName, &u.Name, &u.IsActive, &u.CreatedAt); err != nil {
+			return &team, nil, fmt.Errorf("TeamRepository.GetTeam failed to scan team member: %w", err)
 		}
-		members = append(members, m)
+		users = append(users, u)
 	}
-	return &team, members, nil
+
+	return &team, users, nil
 }
 
-func (r *TeamRepository) GetTeamsForUser(ctx context.Context, userID string) ([]string, error) {
-	q := r.sb.
+func (r *TeamRepository) GetTeamForUser(ctx context.Context, userID string) (string, error) {
+	query := r.sb.
 		Select("team_name").
-		From("team_members").
-		Where(sq.Eq{"user_id": userID})
+		From("users").
+		Where(sq.Eq{"id": userID})
 
-	sql, args, _ := q.ToSql()
-	rows, err := r.pool.Query(ctx, sql, args...)
-	if err != nil {
-		r.log.WithError(err).WithField("user_id", userID).Error("failed to query teams for user")
-		return nil, err
-	}
-	defer rows.Close()
+	row := tryQueryRow(query, r.pool, ctx)
 
-	out := make([]string, 0)
-	for rows.Next() {
-		var tn string
-		if err := rows.Scan(&tn); err != nil {
-			r.log.WithError(err).Error("failed to scan team_name")
-			return nil, err
+	var teamName string
+	if err := row.Scan(&teamName); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", apperror.ErrNotFound
 		}
-		out = append(out, tn)
+		return "", err
 	}
-	return out, nil
+
+	return teamName, nil
 }

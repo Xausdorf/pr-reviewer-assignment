@@ -3,147 +3,157 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/apperror"
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/entity"
-	repo "github.com/Xausdorf/pr-reviewer-assignment/internal/repository"
 )
 
 type PRRepository struct {
 	pool *pgxpool.Pool
 	sb   sq.StatementBuilderType
-	log  *log.Logger
 }
 
-func NewPRRepository(pool *pgxpool.Pool, logger *log.Logger) repo.PRRepository {
-	return &PRRepository{
-		pool: pool,
-		sb:   sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
-		log:  logger,
-	}
+func NewPRRepository(pool *pgxpool.Pool) *PRRepository {
+	return &PRRepository{pool: pool, sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar)}
 }
 
-func (r *PRRepository) Create(ctx context.Context, pr *entity.PR) error {
-	q := r.sb.
+func (r *PRRepository) Create(ctx context.Context, pr entity.PR) error {
+	query := r.sb.
 		Insert("prs").
-		Columns("id", "title", "author_id", "status", "created_at", "updated_at").
-		Values(pr.ID, pr.Title, pr.AuthorID, pr.Status, pr.CreatedAt, pr.UpdatedAt)
+		Columns("id", "title", "author_id", "status", "created_at").
+		Values(pr.ID, pr.Title, pr.AuthorID, pr.Status, pr.CreatedAt)
 
-	sql, args, _ := q.ToSql()
-	_, err := r.pool.Exec(ctx, sql, args...)
-	return err
+	if _, err := tryExec(query, r.pool, ctx); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return apperror.ErrPRExists
+		}
+		return fmt.Errorf("PRRepository.Create failed to insert pr: %w", err)
+	}
+
+	return nil
 }
 
 func (r *PRRepository) GetByID(ctx context.Context, id string) (*entity.PR, error) {
-	q := r.sb.
-		Select("id", "title", "author_id", "status", "created_at", "updated_at").
+	query := r.sb.
+		Select("id", "title", "author_id", "status", "created_at", "merged_at").
 		From("prs").
 		Where(sq.Eq{"id": id})
 
-	sql, args, _ := q.ToSql()
-	row := r.pool.QueryRow(ctx, sql, args...)
+	row := tryQueryRow(query, r.pool, ctx)
 
 	var pr entity.PR
-	if err := row.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.UpdatedAt); err != nil {
+	if err := row.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			r.log.WithField("pr_id", id).Debug("pr not found")
 			return nil, apperror.ErrNotFound
 		}
-		r.log.WithError(err).WithField("pr_id", id).Error("failed to scan pr")
-		return nil, err
+		return nil, fmt.Errorf("PRRepository.GetByID failed to select pr: %w", err)
 	}
+
 	return &pr, nil
 }
 
-func (r *PRRepository) UpdateStatus(ctx context.Context, id string, status string) error {
-	q := r.sb.
+func (r *PRRepository) UpdateStatus(ctx context.Context, id, status string) (*entity.PR, error) {
+	query := r.sb.
 		Update("prs").
 		Set("status", status).
-		Where(sq.Eq{"id": id})
+		Where(sq.Eq{"id": id}).
+		Suffix("RETURNING id, title, author_id, status, created_at, merged_at")
 
-	sql, args, _ := q.ToSql()
-	_, err := r.pool.Exec(ctx, sql, args...)
-	return err
+	row := tryQueryRow(query, r.pool, ctx)
+
+	var pr entity.PR
+	if err := row.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.ErrNotFound
+		}
+		return nil, fmt.Errorf("PRRepository.UpdateStatus failed to update pr status: %w", err)
+	}
+
+	return &pr, nil
 }
 
-func (r *PRRepository) AddReviewer(ctx context.Context, rv *entity.PRReviewer) error {
-	q := r.sb.
-		Insert("pr_reviewers").
-		Columns("pr_id", "reviewer_id", "assigned_from_team", "assigned_at").
-		Values(rv.PRID, rv.ReviewerID, rv.AssignedFromTeam, rv.AssignedAt)
+func (r *PRRepository) AssignReviewer(ctx context.Context, prID, teamName string) (reviewerID string, err error) {
+	querySelect := r.sb.
+		Select("id").
+		From("users").
+		Where(sq.Eq{"team_name": teamName, "is_active": true}).
+		Where("id NOT IN (SELECT reviewer_id FROM pr_reviewers WHERE pr_id = ?)", prID).
+		Where("id NOT IN (SELECT author_id FROM prs WHERE id = ?)", prID).
+		OrderBy("RANDOM()").
+		Limit(1)
 
-	sql, args, _ := q.ToSql()
-	_, err := r.pool.Exec(ctx, sql, args...)
-	if err != nil {
-		r.log.WithError(err).WithFields(log.Fields{"pr_id": rv.PRID, "reviewer_id": rv.ReviewerID}).Error("failed to insert pr_reviewer")
+	row := tryQueryRow(querySelect, r.pool, ctx)
+
+	if err := row.Scan(&reviewerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", apperror.ErrNoCandidate
+		}
+		return "", err
 	}
-	return err
+
+	queryInsert := r.sb.
+		Insert("pr_reviewers").
+		Columns("pr_id", "reviewer_id").
+		Values(prID, reviewerID)
+
+	if _, err := tryExec(queryInsert, r.pool, ctx); err != nil {
+		return "", fmt.Errorf("PRRepository.AssignReviewer failed to insert pr_reviewer: %w", err)
+	}
+
+	return reviewerID, nil
 }
 
 func (r *PRRepository) RemoveReviewer(ctx context.Context, prID, reviewerID string) error {
-	q := r.sb.
+	query := r.sb.
 		Delete("pr_reviewers").
 		Where(sq.Eq{"pr_id": prID, "reviewer_id": reviewerID})
 
-	sql, args, _ := q.ToSql()
-	_, err := r.pool.Exec(ctx, sql, args...)
-	if err != nil {
-		r.log.WithError(err).WithFields(log.Fields{"pr_id": prID, "reviewer_id": reviewerID}).Error("failed to remove pr_reviewer")
+	if _, err := tryExec(query, r.pool, ctx); err != nil {
+		return fmt.Errorf("PRRepository.RemoveReviewer failed to delete pr_reviewer: %w", err)
 	}
-	return err
+
+	return nil
 }
 
-func (r *PRRepository) ListAssignedTo(ctx context.Context, userID string) ([]*entity.PR, error) {
-	q := r.sb.
-		Select("p.id", "p.title", "p.author_id", "p.status", "p.created_at", "p.updated_at").
-		From("prs p").Join("pr_reviewers r ON p.id = r.pr_id").
-		Where(sq.Eq{"r.reviewer_id": userID})
+func (r *PRRepository) DeleteByID(ctx context.Context, prID string) error {
+	query := r.sb.
+		Delete("prs").
+		Where(sq.Eq{"id": prID})
 
-	sql, args, _ := q.ToSql()
-	rows, err := r.pool.Query(ctx, sql, args...)
-	if err != nil {
-		r.log.WithError(err).WithField("user_id", userID).Error("failed to query assigned prs")
-		return nil, err
+	if _, err := tryExec(query, r.pool, ctx); err != nil {
+		return fmt.Errorf("PRRepository.DeleteByID failed to delete pr: %w", err)
 	}
-	defer rows.Close()
 
-	out := make([]*entity.PR, 0)
-	for rows.Next() {
-		var pr entity.PR
-		if err := rows.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.UpdatedAt); err != nil {
-			r.log.WithError(err).Error("failed to scan assigned pr")
-			return nil, err
-		}
-		out = append(out, &pr)
-	}
-	return out, nil
+	return nil
 }
 
-func (r *PRRepository) ListReviewers(ctx context.Context, prID string) ([]entity.PRReviewer, error) {
-	q := r.sb.
-		Select("pr_id", "reviewer_id", "assigned_from_team", "assigned_at").
+func (r *PRRepository) GetAssignedReviewers(ctx context.Context, prID string) ([]string, error) {
+	query := r.sb.
+		Select("reviewer_id").
 		From("pr_reviewers").
 		Where(sq.Eq{"pr_id": prID})
 
-	sql, args, _ := q.ToSql()
-	rows, err := r.pool.Query(ctx, sql, args...)
+	rows, err := tryQuery(query, r.pool, ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("PRRepository.GetAssignedReviewers failed to select reviewers: %w", err)
 	}
 	defer rows.Close()
 
-	out := make([]entity.PRReviewer, 0)
+	assignedIDs := make([]string, 0)
 	for rows.Next() {
-		var rv entity.PRReviewer
-		if err := rows.Scan(&rv.PRID, &rv.ReviewerID, &rv.AssignedFromTeam, &rv.AssignedAt); err != nil {
-			return nil, err
+		var reviewerID string
+		if err := rows.Scan(&reviewerID); err != nil {
+			return nil, fmt.Errorf("PRRepository.GetAssignedReviewers failed to scan reviewer ID: %w", err)
 		}
-		out = append(out, rv)
+		assignedIDs = append(assignedIDs, reviewerID)
 	}
-	return out, nil
+
+	return assignedIDs, nil
 }

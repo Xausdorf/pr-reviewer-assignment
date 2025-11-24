@@ -1,39 +1,76 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+
 	nethttp "net/http"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/apperror"
-	"github.com/Xausdorf/pr-reviewer-assignment/internal/usecase"
+	"github.com/Xausdorf/pr-reviewer-assignment/internal/entity"
 )
 
-type Server struct {
-	PRUseCase   usecase.PRUseCase
-	TeamUseCase usecase.TeamUseCase
-	UserUseCase usecase.UserUseCase
+type PRUseCase interface {
+	CreatePullRequest(ctx context.Context, pr entity.PR) (assignedIDs []string, err error)
+	MergePullRequest(ctx context.Context, prID string) (*entity.PR, error)
+	ReassignReviewer(ctx context.Context, prID, oldUserID string) (string, *entity.PR, error)
+	GetAssignedReviewers(ctx context.Context, prID string) (assignedIDs []string, err error)
 }
 
-func NewServer(pr usecase.PRUseCase, team usecase.TeamUseCase, user usecase.UserUseCase) *Server {
+type TeamUseCase interface {
+	AddTeam(ctx context.Context, team entity.Team, users []entity.User) error
+	GetTeam(ctx context.Context, name string) (*entity.Team, []entity.User, error)
+}
+
+type UserUseCase interface {
+	SetIsActive(ctx context.Context, userID string, isActive bool) (*entity.User, error)
+	GetAssignedTo(ctx context.Context, userID string) ([]entity.PR, error)
+}
+
+type Server struct {
+	PRUseCase   PRUseCase
+	TeamUseCase TeamUseCase
+	UserUseCase UserUseCase
+	log         *log.Logger
+}
+
+func NewServer(pr PRUseCase, team TeamUseCase, user UserUseCase, logger *log.Logger) *Server {
 	return &Server{
 		PRUseCase:   pr,
 		TeamUseCase: team,
 		UserUseCase: user,
+		log:         logger,
 	}
 }
 
-func writeJSON(w nethttp.ResponseWriter, status int, v interface{}) {
+func (s *Server) writeJSON(w nethttp.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		s.log.WithError(err).Error("Failed to write JSON response")
+	}
 }
 
-func writeError(w nethttp.ResponseWriter, status int, code ErrorResponseErrorCode, message string) {
+func (s *Server) writeError(w nethttp.ResponseWriter, status int, code ErrorResponseErrorCode, message string) {
 	resp := ErrorResponse{}
 	resp.Error.Code = code
 	resp.Error.Message = message
-	writeJSON(w, status, resp)
+
+	logEntry := s.log.WithFields(log.Fields{
+		"status":  status,
+		"code":    code,
+		"message": message,
+	})
+	if status == nethttp.StatusInternalServerError {
+		logEntry.Error("Writing internal server error response")
+	} else {
+		logEntry.Info("Writing error response")
+	}
+
+	s.writeJSON(w, status, resp)
 }
 
 func mapDomainError(err error) (int, ErrorResponseErrorCode) {
@@ -51,6 +88,9 @@ func mapDomainError(err error) (int, ErrorResponseErrorCode) {
 	}
 	if errors.Is(err, apperror.ErrPRMerged) {
 		return nethttp.StatusConflict, PRMERGED
+	}
+	if errors.Is(err, apperror.ErrTeamExists) {
+		return nethttp.StatusBadRequest, TEAMEXISTS
 	}
 	return nethttp.StatusInternalServerError, NOTFOUND
 }

@@ -6,28 +6,26 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/entity"
-	repo "github.com/Xausdorf/pr-reviewer-assignment/internal/repository"
 )
 
-type TeamService struct {
-	teamRepo repo.TeamRepository
-	userRepo repo.UserRepository
+type TeamUseCase struct {
+	teamRepo TeamRepository
 	log      *log.Logger
 }
 
-func NewTeamService(team repo.TeamRepository, user repo.UserRepository, logger *log.Logger) *TeamService {
-	return &TeamService{teamRepo: team, userRepo: user, log: logger}
+func NewTeamUseCase(team TeamRepository, logger *log.Logger) *TeamUseCase {
+	return &TeamUseCase{teamRepo: team, log: logger}
 }
 
-func (s *TeamService) AddOrUpdateTeam(ctx context.Context, team *entity.Team, members []entity.TeamMember, users []*entity.User) error {
-	for _, u := range users {
-		if err := s.userRepo.CreateOrUpdateUser(ctx, u); err != nil {
-			s.log.WithError(err).WithField("user", u.ID).Error("failed to create/update user")
-		}
-	}
-	return s.teamRepo.CreateOrUpdateTeam(ctx, team, members)
+func (s *TeamUseCase) AddTeam(ctx context.Context, team entity.Team, users []entity.User) error {
+	s.log.WithFields(log.Fields{
+		"team":  team.Name,
+		"count": len(users),
+	}).Info("TeamUseCase - adding team")
+	return s.teamRepo.CreateTeam(ctx, team, users)
 }
 
-func (s *TeamService) GetTeam(ctx context.Context, name string) (*entity.Team, []entity.TeamMember, error) {
+func (s *TeamUseCase) GetTeam(ctx context.Context, name string) (*entity.Team, []entity.User, error) {
+	s.log.WithField("team", name).Info("TeamUseCase - getting team")
 	return s.teamRepo.GetTeam(ctx, name)
 }

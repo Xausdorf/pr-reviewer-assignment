@@ -20,30 +20,30 @@ func RunMigrations(ctx context.Context, databaseURL, migrationsDir string, logge
 
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
-		logger.WithError(err).Error("open database for migrations")
+		logger.WithError(err).Error("Failed to open database for migrations")
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
 	driver, err := postgres.WithInstance(db, &postgres.Config{})
 	if err != nil {
-		logger.WithError(err).Error("create migrate postgres driver")
+		logger.WithError(err).Error("Failed to create migrate postgres driver")
 		return fmt.Errorf("postgres driver: %w", err)
 	}
 
 	sourceURL := "file://" + migrationsDir
 	m, err := migrate.NewWithDatabaseInstance(sourceURL, "postgres", driver)
 	if err != nil {
-		logger.WithError(err).WithField("source", sourceURL).Error("create migrate instance")
+		logger.WithError(err).WithField("source", sourceURL).Error("Failed to create migrate instance")
 		return fmt.Errorf("create migrate: %w", err)
 	}
 	err = m.Up()
 	defer m.Close()
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		logger.WithError(err).Error("running migrations")
+		logger.WithError(err).Error("Failed running migrations")
 		return fmt.Errorf("migrate up: %w", err)
 	}
 
-	logger.WithField("source", sourceURL).Info("migrations applied (no change or up completed)")
+	logger.WithField("source", sourceURL).Info("Migrations applied (no change or up completed)")
 	return nil
 }

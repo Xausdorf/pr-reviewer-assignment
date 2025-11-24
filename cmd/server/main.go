@@ -11,7 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	gwhttp "github.com/Xausdorf/pr-reviewer-assignment/internal/gateway/http"
-	repo_pg "github.com/Xausdorf/pr-reviewer-assignment/internal/repository/postgres"
+	repopg "github.com/Xausdorf/pr-reviewer-assignment/internal/repository/postgres"
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/usecase"
 	"github.com/Xausdorf/pr-reviewer-assignment/pkg/migrate"
 	pg "github.com/Xausdorf/pr-reviewer-assignment/pkg/postgres"
@@ -49,18 +49,18 @@ func main() {
 	defer pg.ClosePool(pool)
 
 	// repositories
-	prRepo := repo_pg.NewPRRepository(pool, logger)
-	teamRepo := repo_pg.NewTeamRepository(pool, logger)
-	userRepo := repo_pg.NewUserRepository(pool, logger)
+	prRepo := repopg.NewPRRepository(pool)
+	teamRepo := repopg.NewTeamRepository(pool)
+	userRepo := repopg.NewUserRepository(pool)
 
 	// services
-	prSvc := usecase.NewPRService(prRepo, teamRepo, userRepo, logger)
-	teamSvc := usecase.NewTeamService(teamRepo, userRepo, logger)
-	userSvc := usecase.NewUserService(userRepo, logger)
+	prUseCase := usecase.NewPRUseCase(prRepo, userRepo, logger)
+	teamUseCase := usecase.NewTeamUseCase(teamRepo, logger)
+	userUseCase := usecase.NewUserUseCase(userRepo, logger)
 
 	// http server
-	srvImpl := gwhttp.NewServer(prSvc, teamSvc, userSvc)
-	handler := gwhttp.Handler(srvImpl)
+	server := gwhttp.NewServer(prUseCase, teamUseCase, userUseCase, logger)
+	handler := gwhttp.Handler(server)
 
 	addr := ":8080"
 	if a := os.Getenv("ADDRESS"); a != "" {

@@ -6,25 +6,26 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/entity"
-	repo "github.com/Xausdorf/pr-reviewer-assignment/internal/repository"
 )
 
-type UserService struct {
-	userRepo repo.UserRepository
+type UserUseCase struct {
+	userRepo UserRepository
 	log      *log.Logger
 }
 
-func NewUserService(user repo.UserRepository, logger *log.Logger) *UserService {
-	return &UserService{userRepo: user, log: logger}
+func NewUserUseCase(user UserRepository, logger *log.Logger) *UserUseCase {
+	return &UserUseCase{userRepo: user, log: logger}
 }
 
-func (s *UserService) SetIsActive(ctx context.Context, userID string, isActive bool) (*entity.User, error) {
-	if err := s.userRepo.SetIsActive(ctx, userID, isActive); err != nil {
-		return nil, err
-	}
-	return s.userRepo.GetByID(ctx, userID)
+func (s *UserUseCase) SetIsActive(ctx context.Context, userID string, isActive bool) (*entity.User, error) {
+	s.log.WithFields(log.Fields{
+		"userID":   userID,
+		"isActive": isActive,
+	}).Info("UserUseCase - setting user active status")
+	return s.userRepo.SetIsActive(ctx, userID, isActive)
 }
 
-func (s *UserService) GetByID(ctx context.Context, id string) (*entity.User, error) {
-	return s.userRepo.GetByID(ctx, id)
+func (s *UserUseCase) GetAssignedTo(ctx context.Context, userID string) ([]entity.PR, error) {
+	s.log.WithField("userID", userID).Info("UserUseCase - getting assigned PRs")
+	return s.userRepo.ListAssignedTo(ctx, userID)
 }

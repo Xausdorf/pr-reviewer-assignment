@@ -3,73 +3,102 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/apperror"
 	"github.com/Xausdorf/pr-reviewer-assignment/internal/entity"
-	repo "github.com/Xausdorf/pr-reviewer-assignment/internal/repository"
 )
 
 type UserRepository struct {
 	pool *pgxpool.Pool
 	sb   sq.StatementBuilderType
-	log  *log.Logger
 }
 
-func NewUserRepository(pool *pgxpool.Pool, logger *log.Logger) repo.UserRepository {
-	return &UserRepository{pool: pool, sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar), log: logger}
+func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
+	return &UserRepository{pool: pool, sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar)}
 }
 
-func (r *UserRepository) CreateOrUpdateUser(ctx context.Context, u *entity.User) error {
-	q := r.sb.
-		Insert("users").
-		Columns("id", "name", "is_active", "created_at").
-		Values(u.ID, u.Name, u.IsActive, u.CreatedAt).
-		Suffix("ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, is_active = EXCLUDED.is_active")
-
-	sql, args, _ := q.ToSql()
-	_, err := r.pool.Exec(ctx, sql, args...)
-	if err != nil {
-		r.log.WithError(err).WithField("user_id", u.ID).Error("failed to create/update user")
-	}
-	return err
-}
-
-func (r *UserRepository) SetIsActive(ctx context.Context, userID string, isActive bool) error {
-	q := r.sb.
+func (r *UserRepository) SetIsActive(ctx context.Context, userID string, isActive bool) (*entity.User, error) {
+	query := r.sb.
 		Update("users").
 		Set("is_active", isActive).
-		Where(sq.Eq{"id": userID})
+		Where(sq.Eq{"id": userID}).
+		Suffix("RETURNING id, name, team_name, is_active, created_at")
 
-	sql, args, _ := q.ToSql()
-	_, err := r.pool.Exec(ctx, sql, args...)
-	if err != nil {
-		r.log.WithError(err).WithField("user_id", userID).Error("failed to set is_active")
-	}
-	return err
-}
+	row := tryQueryRow(query, r.pool, ctx)
 
-func (r *UserRepository) GetByID(ctx context.Context, id string) (*entity.User, error) {
-	q := r.sb.
-		Select("id", "name", "is_active", "created_at").
-		From("users").
-		Where(sq.Eq{"id": id})
-
-	sql, args, _ := q.ToSql()
-	row := r.pool.QueryRow(ctx, sql, args...)
-
-	var u entity.User
-	if err := row.Scan(&u.ID, &u.Name, &u.IsActive, &u.CreatedAt); err != nil {
+	var user entity.User
+	if err := row.Scan(&user.ID, &user.Name, &user.TeamName, &user.IsActive, &user.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			r.log.WithField("user_id", id).Debug("user not found")
 			return nil, apperror.ErrNotFound
 		}
-		r.log.WithError(err).WithField("user_id", id).Error("failed to scan user")
-		return nil, err
+		return nil, fmt.Errorf("UserRepository.SetIsActive failed to update user: %w", err)
 	}
-	return &u, nil
+
+	return &user, nil
+}
+
+func (r *UserRepository) ListAssignedTo(ctx context.Context, userID string) ([]entity.PR, error) {
+	query := r.sb.
+		Select("p.id", "p.title", "p.author_id", "p.status", "p.created_at", "p.merged_at").
+		From("prs p").
+		Join("pr_reviewers r ON p.id = r.pr_id").
+		Where(sq.Eq{"r.reviewer_id": userID})
+
+	rows, err := tryQuery(query, r.pool, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("UserRepository.ListAssignedTo failed to select assigned PRs: %w", err)
+	}
+	defer rows.Close()
+
+	prs := make([]entity.PR, 0)
+	for rows.Next() {
+		var pr entity.PR
+		if err := rows.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt); err != nil {
+			return nil, fmt.Errorf("UserRepository.ListAssignedTo failed to scan assigned PR: %w", err)
+		}
+		prs = append(prs, pr)
+	}
+
+	return prs, nil
+}
+
+func (r *UserRepository) IsAssignedToPR(ctx context.Context, userID, prID string) (bool, error) {
+	query := sq.Select("1").
+		Prefix("SELECT EXISTS (").
+		From("pr_reviewers").
+		Where(sq.Eq{"pr_id": prID, "reviewer_id": userID}).
+		Suffix(")")
+
+	row := tryQueryRow(query, r.pool, ctx)
+
+	var exists bool
+	if err := row.Scan(&exists); err != nil {
+		return false, fmt.Errorf("UserRepository.IsAssignedToPR failed to check assignment: %w", err)
+	}
+
+	return exists, nil
+}
+
+func (r *UserRepository) GetByID(ctx context.Context, userID string) (*entity.User, error) {
+	query := r.sb.
+		Select("id", "team_name", "name", "is_active", "created_at").
+		From("users").
+		Where(sq.Eq{"id": userID})
+
+	row := tryQueryRow(query, r.pool, ctx)
+
+	var user entity.User
+	if err := row.Scan(&user.ID, &user.TeamName, &user.Name, &user.IsActive, &user.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.ErrNotFound
+		}
+		return nil, fmt.Errorf("UserRepository.GetByID failed to select user: %w", err)
+	}
+
+	return &user, nil
 }
