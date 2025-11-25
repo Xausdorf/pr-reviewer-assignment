@@ -68,7 +68,7 @@ func (r *UserRepository) ListAssignedTo(ctx context.Context, userID string) ([]e
 }
 
 func (r *UserRepository) IsAssignedToPR(ctx context.Context, userID, prID string) (bool, error) {
-	query := sq.Select("1").
+	query := r.sb.Select("1").
 		Prefix("SELECT EXISTS (").
 		From("pr_reviewers").
 		Where(sq.Eq{"pr_id": prID, "reviewer_id": userID}).

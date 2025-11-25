@@ -2,7 +2,7 @@ CREATE OR REPLACE FUNCTION prs_update_merged_at()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.status = 'MERGED' AND OLD.status = 'OPEN' THEN 
-    NEW.updated_at = now();
+    NEW.merged_at = now();
   END IF;
   RETURN NEW;
 END;
