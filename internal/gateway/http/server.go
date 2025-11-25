@@ -46,7 +46,7 @@ func NewServer(pr PRUseCase, team TeamUseCase, user UserUseCase, logger *log.Log
 	}
 }
 
-func (s *Server) writeJSON(w nethttp.ResponseWriter, status int, v interface{}) {
+func (s *Server) writeJSON(w nethttp.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {

@@ -1,19 +1,20 @@
 package migrate
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
+	log "github.com/sirupsen/logrus"
+
+	// blank imports for database and source drivers.
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	log "github.com/sirupsen/logrus"
 )
 
-func RunMigrations(ctx context.Context, databaseURL, migrationsDir string, logger *log.Logger) error {
+func RunMigrations(databaseURL, migrationsDir string, logger *log.Logger) error {
 	if migrationsDir == "" {
 		migrationsDir = "./migrations"
 	}

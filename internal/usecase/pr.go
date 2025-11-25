@@ -32,13 +32,14 @@ func (s *PRUseCase) CreatePullRequest(ctx context.Context, pr entity.PR) ([]stri
 		return nil, err
 	}
 
-	if err := s.prRepo.Create(ctx, pr); err != nil {
+	if err = s.prRepo.Create(ctx, pr); err != nil {
 		return nil, err
 	}
 
 	assigned := make([]string, 0, MaxReviewersCount)
-	for i := 0; i < MaxReviewersCount; i++ {
-		reviewerID, err := s.prRepo.AssignReviewer(ctx, pr.ID, author.TeamName)
+	for range MaxReviewersCount {
+		var reviewerID string
+		reviewerID, err = s.prRepo.AssignReviewer(ctx, pr.ID, author.TeamName)
 		if errors.Is(err, apperror.ErrNoCandidate) {
 			break
 		}
@@ -95,7 +96,7 @@ func (s *PRUseCase) ReassignReviewer(ctx context.Context, prID, oldUserID string
 	if err != nil {
 		return "", nil, err
 	}
-	if err := s.prRepo.RemoveReviewer(ctx, prID, oldUserID); err != nil {
+	if err = s.prRepo.RemoveReviewer(ctx, prID, oldUserID); err != nil {
 		_ = s.prRepo.RemoveReviewer(ctx, prID, newUserID)
 		return "", nil, err
 	}
@@ -103,7 +104,7 @@ func (s *PRUseCase) ReassignReviewer(ctx context.Context, prID, oldUserID string
 	return newUserID, pr, nil
 }
 
-func (s *PRUseCase) GetAssignedReviewers(ctx context.Context, prID string) (assignedIDs []string, err error) {
+func (s *PRUseCase) GetAssignedReviewers(ctx context.Context, prID string) ([]string, error) {
 	s.log.WithField("prID", prID).Info("PRUseCase - getting assigned reviewers")
 	return s.prRepo.GetAssignedReviewers(ctx, prID)
 }

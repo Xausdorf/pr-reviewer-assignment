@@ -12,7 +12,7 @@ type errRow struct {
 	err error
 }
 
-func (e errRow) Scan(dest ...any) error {
+func (e errRow) Scan(_ ...any) error {
 	return e.err
 }
 
@@ -34,7 +34,7 @@ func (errRows) FieldDescriptions() []pgconn.FieldDescription {
 func (errRows) Next() bool {
 	return false
 }
-func (e errRows) Scan(dest ...any) error {
+func (e errRows) Scan(_ ...any) error {
 	return e.err
 }
 func (e errRows) Values() ([]any, error) {
@@ -48,22 +48,23 @@ func (e errRows) Conn() *pgx.Conn {
 }
 
 type toSqler interface {
-	ToSql() (string, []interface{}, error)
+	ToSql() (string, []any, error)
 }
 
 type execer interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
-func tryExec(query toSqler, executor execer, ctx context.Context) (pgconn.CommandTag, error) {
+func tryExec(ctx context.Context, query toSqler, executor execer) error {
 	sql, args, err := query.ToSql()
 	if err != nil {
-		return pgconn.CommandTag{}, err
+		return err
 	}
-	return executor.Exec(ctx, sql, args...)
+	_, err = executor.Exec(ctx, sql, args...)
+	return err
 }
 
-func tryQueryRow(query toSqler, pool *pgxpool.Pool, ctx context.Context) pgx.Row {
+func tryQueryRow(ctx context.Context, query toSqler, pool *pgxpool.Pool) pgx.Row {
 	sql, args, err := query.ToSql()
 	if err != nil {
 		return errRow{err: err}
@@ -71,7 +72,7 @@ func tryQueryRow(query toSqler, pool *pgxpool.Pool, ctx context.Context) pgx.Row
 	return pool.QueryRow(ctx, sql, args...)
 }
 
-func tryQuery(query toSqler, pool *pgxpool.Pool, ctx context.Context) (pgx.Rows, error) {
+func tryQuery(ctx context.Context, query toSqler, pool *pgxpool.Pool) (pgx.Rows, error) {
 	sql, args, err := query.ToSql()
 	if err != nil {
 		return errRows{err: err}, err

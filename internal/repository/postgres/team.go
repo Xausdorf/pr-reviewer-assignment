@@ -28,14 +28,14 @@ func (r *TeamRepository) CreateTeam(ctx context.Context, team entity.Team, membe
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := r.sb.
 		Insert("teams").
 		Columns("name", "created_at").
 		Values(team.Name, team.CreatedAt)
 
-	if _, err := tryExec(query, tx, ctx); err != nil {
+	if err = tryExec(ctx, query, tx); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return apperror.ErrTeamExists
@@ -54,7 +54,7 @@ func (r *TeamRepository) CreateTeam(ctx context.Context, team entity.Team, membe
 		queryAddUsers = queryAddUsers.Suffix("ON CONFLICT (id) DO UPDATE SET " +
 			"team_name = EXCLUDED.team_name, name = EXCLUDED.name, is_active = EXCLUDED.is_active")
 
-		if _, err := tryExec(queryAddUsers, tx, ctx); err != nil {
+		if err = tryExec(ctx, queryAddUsers, tx); err != nil {
 			return fmt.Errorf("TeamRepository.CreateTeam failed to insert or update team members: %w", err)
 		}
 	}
@@ -68,7 +68,7 @@ func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team
 		From("teams").
 		Where(sq.Eq{"name": name})
 
-	row := tryQueryRow(query, r.pool, ctx)
+	row := tryQueryRow(ctx, query, r.pool)
 
 	var team entity.Team
 	if err := row.Scan(&team.Name, &team.CreatedAt); err != nil {
@@ -83,7 +83,7 @@ func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team
 		From("users").
 		Where(sq.Eq{"team_name": name})
 
-	rows, err := tryQuery(queryUsers, r.pool, ctx)
+	rows, err := tryQuery(ctx, queryUsers, r.pool)
 	if err != nil {
 		return &team, nil, fmt.Errorf("TeamRepository.GetTeam failed to select team members: %w", err)
 	}
@@ -92,7 +92,7 @@ func (r *TeamRepository) GetTeam(ctx context.Context, name string) (*entity.Team
 	users := make([]entity.User, 0)
 	for rows.Next() {
 		var u entity.User
-		if err := rows.Scan(&u.ID, &u.TeamName, &u.Name, &u.IsActive, &u.CreatedAt); err != nil {
+		if err = rows.Scan(&u.ID, &u.TeamName, &u.Name, &u.IsActive, &u.CreatedAt); err != nil {
 			return &team, nil, fmt.Errorf("TeamRepository.GetTeam failed to scan team member: %w", err)
 		}
 		users = append(users, u)
@@ -107,7 +107,7 @@ func (r *TeamRepository) GetTeamForUser(ctx context.Context, userID string) (str
 		From("users").
 		Where(sq.Eq{"id": userID})
 
-	row := tryQueryRow(query, r.pool, ctx)
+	row := tryQueryRow(ctx, query, r.pool)
 
 	var teamName string
 	if err := row.Scan(&teamName); err != nil {

@@ -29,7 +29,7 @@ func (r *PRRepository) Create(ctx context.Context, pr entity.PR) error {
 		Columns("id", "title", "author_id", "status", "created_at").
 		Values(pr.ID, pr.Title, pr.AuthorID, pr.Status, pr.CreatedAt)
 
-	if _, err := tryExec(query, r.pool, ctx); err != nil {
+	if err := tryExec(ctx, query, r.pool); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return apperror.ErrPRExists
@@ -46,7 +46,7 @@ func (r *PRRepository) GetByID(ctx context.Context, id string) (*entity.PR, erro
 		From("prs").
 		Where(sq.Eq{"id": id})
 
-	row := tryQueryRow(query, r.pool, ctx)
+	row := tryQueryRow(ctx, query, r.pool)
 
 	var pr entity.PR
 	if err := row.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt); err != nil {
@@ -66,7 +66,7 @@ func (r *PRRepository) UpdateStatus(ctx context.Context, id, status string) (*en
 		Where(sq.Eq{"id": id}).
 		Suffix("RETURNING id, title, author_id, status, created_at, merged_at")
 
-	row := tryQueryRow(query, r.pool, ctx)
+	row := tryQueryRow(ctx, query, r.pool)
 
 	var pr entity.PR
 	if err := row.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt); err != nil {
@@ -79,7 +79,7 @@ func (r *PRRepository) UpdateStatus(ctx context.Context, id, status string) (*en
 	return &pr, nil
 }
 
-func (r *PRRepository) AssignReviewer(ctx context.Context, prID, teamName string) (reviewerID string, err error) {
+func (r *PRRepository) AssignReviewer(ctx context.Context, prID, teamName string) (string, error) {
 	querySelect := r.sb.
 		Select("id").
 		From("users").
@@ -89,8 +89,9 @@ func (r *PRRepository) AssignReviewer(ctx context.Context, prID, teamName string
 		OrderBy("RANDOM()").
 		Limit(1)
 
-	row := tryQueryRow(querySelect, r.pool, ctx)
+	row := tryQueryRow(ctx, querySelect, r.pool)
 
+	var reviewerID string
 	if err := row.Scan(&reviewerID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", apperror.ErrNoCandidate
@@ -103,7 +104,7 @@ func (r *PRRepository) AssignReviewer(ctx context.Context, prID, teamName string
 		Columns("pr_id", "reviewer_id").
 		Values(prID, reviewerID)
 
-	if _, err := tryExec(queryInsert, r.pool, ctx); err != nil {
+	if err := tryExec(ctx, queryInsert, r.pool); err != nil {
 		return "", fmt.Errorf("PRRepository.AssignReviewer failed to insert pr_reviewer: %w", err)
 	}
 
@@ -115,7 +116,7 @@ func (r *PRRepository) RemoveReviewer(ctx context.Context, prID, reviewerID stri
 		Delete("pr_reviewers").
 		Where(sq.Eq{"pr_id": prID, "reviewer_id": reviewerID})
 
-	if _, err := tryExec(query, r.pool, ctx); err != nil {
+	if err := tryExec(ctx, query, r.pool); err != nil {
 		return fmt.Errorf("PRRepository.RemoveReviewer failed to delete pr_reviewer: %w", err)
 	}
 
@@ -127,7 +128,7 @@ func (r *PRRepository) DeleteByID(ctx context.Context, prID string) error {
 		Delete("prs").
 		Where(sq.Eq{"id": prID})
 
-	if _, err := tryExec(query, r.pool, ctx); err != nil {
+	if err := tryExec(ctx, query, r.pool); err != nil {
 		return fmt.Errorf("PRRepository.DeleteByID failed to delete pr: %w", err)
 	}
 
@@ -140,7 +141,7 @@ func (r *PRRepository) GetAssignedReviewers(ctx context.Context, prID string) ([
 		From("pr_reviewers").
 		Where(sq.Eq{"pr_id": prID})
 
-	rows, err := tryQuery(query, r.pool, ctx)
+	rows, err := tryQuery(ctx, query, r.pool)
 	if err != nil {
 		return nil, fmt.Errorf("PRRepository.GetAssignedReviewers failed to select reviewers: %w", err)
 	}
@@ -149,7 +150,7 @@ func (r *PRRepository) GetAssignedReviewers(ctx context.Context, prID string) ([
 	assignedIDs := make([]string, 0)
 	for rows.Next() {
 		var reviewerID string
-		if err := rows.Scan(&reviewerID); err != nil {
+		if err = rows.Scan(&reviewerID); err != nil {
 			return nil, fmt.Errorf("PRRepository.GetAssignedReviewers failed to scan reviewer ID: %w", err)
 		}
 		assignedIDs = append(assignedIDs, reviewerID)

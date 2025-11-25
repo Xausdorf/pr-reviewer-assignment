@@ -29,7 +29,7 @@ func (r *UserRepository) SetIsActive(ctx context.Context, userID string, isActiv
 		Where(sq.Eq{"id": userID}).
 		Suffix("RETURNING id, name, team_name, is_active, created_at")
 
-	row := tryQueryRow(query, r.pool, ctx)
+	row := tryQueryRow(ctx, query, r.pool)
 
 	var user entity.User
 	if err := row.Scan(&user.ID, &user.Name, &user.TeamName, &user.IsActive, &user.CreatedAt); err != nil {
@@ -49,7 +49,7 @@ func (r *UserRepository) ListAssignedTo(ctx context.Context, userID string) ([]e
 		Join("pr_reviewers r ON p.id = r.pr_id").
 		Where(sq.Eq{"r.reviewer_id": userID})
 
-	rows, err := tryQuery(query, r.pool, ctx)
+	rows, err := tryQuery(ctx, query, r.pool)
 	if err != nil {
 		return nil, fmt.Errorf("UserRepository.ListAssignedTo failed to select assigned PRs: %w", err)
 	}
@@ -58,7 +58,7 @@ func (r *UserRepository) ListAssignedTo(ctx context.Context, userID string) ([]e
 	prs := make([]entity.PR, 0)
 	for rows.Next() {
 		var pr entity.PR
-		if err := rows.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt); err != nil {
+		if err = rows.Scan(&pr.ID, &pr.Title, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt); err != nil {
 			return nil, fmt.Errorf("UserRepository.ListAssignedTo failed to scan assigned PR: %w", err)
 		}
 		prs = append(prs, pr)
@@ -74,7 +74,7 @@ func (r *UserRepository) IsAssignedToPR(ctx context.Context, userID, prID string
 		Where(sq.Eq{"pr_id": prID, "reviewer_id": userID}).
 		Suffix(")")
 
-	row := tryQueryRow(query, r.pool, ctx)
+	row := tryQueryRow(ctx, query, r.pool)
 
 	var exists bool
 	if err := row.Scan(&exists); err != nil {
@@ -90,7 +90,7 @@ func (r *UserRepository) GetByID(ctx context.Context, userID string) (*entity.Us
 		From("users").
 		Where(sq.Eq{"id": userID})
 
-	row := tryQueryRow(query, r.pool, ctx)
+	row := tryQueryRow(ctx, query, r.pool)
 
 	var user entity.User
 	if err := row.Scan(&user.ID, &user.TeamName, &user.Name, &user.IsActive, &user.CreatedAt); err != nil {

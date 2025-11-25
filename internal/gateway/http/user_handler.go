@@ -14,7 +14,7 @@ type UsersSetIsActiveResponse struct {
 }
 
 type UsersGetReviewResponse struct {
-	UserId       string             `json:"user_id"`
+	UserID       string             `json:"user_id"`
 	PullRequests []PullRequestShort `json:"pull_requests"`
 }
 
@@ -56,7 +56,7 @@ func (s *Server) GetUsersGetReview(w nethttp.ResponseWriter, r *nethttp.Request,
 	}
 
 	resp := UsersGetReviewResponse{
-		UserId:       params.UserId,
+		UserID:       params.UserId,
 		PullRequests: out,
 	}
 

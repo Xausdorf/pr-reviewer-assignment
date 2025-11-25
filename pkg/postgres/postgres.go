@@ -47,7 +47,7 @@ func NewPool(ctx context.Context, cfg Config, logger *log.Logger) (*pgxpool.Pool
 	ctxPing, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
 	logger.WithField("component", "postgres").Info("Pinging postgres")
-	if err := pool.Ping(ctxPing); err != nil {
+	if err = pool.Ping(ctxPing); err != nil {
 		logger.WithError(err).Error("Failed to ping postgres")
 		pool.Close()
 		return nil, err

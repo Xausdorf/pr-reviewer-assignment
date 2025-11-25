@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"os/signal"
@@ -51,7 +52,7 @@ func main() {
 	if mdir := os.Getenv("MIGRATIONS_DIR"); mdir != "" {
 		migrationsDir = mdir
 	}
-	if err := migrate.RunMigrations(ctx, dbURL, migrationsDir, logger); err != nil {
+	if err := migrate.RunMigrations(dbURL, migrationsDir, logger); err != nil {
 		logger.WithError(err).Fatal("migrations failed")
 	}
 
@@ -92,7 +93,7 @@ func main() {
 
 	go func() {
 		logger.WithField("addr", httpServer.Addr).Info("starting server")
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err = httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.WithError(err).Fatal("http server failed")
 		}
 	}()
@@ -104,7 +105,7 @@ func main() {
 	logger.Info("shutting down")
 	ctxShut, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
 	defer cancel()
-	if err := httpServer.Shutdown(ctxShut); err != nil {
+	if err = httpServer.Shutdown(ctxShut); err != nil {
 		logger.WithError(err).Error("error during shutdown")
 	}
 }
