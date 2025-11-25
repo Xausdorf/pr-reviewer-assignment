@@ -17,5 +17,4 @@ COPY --from=builder /out/app /app/app
 COPY --from=builder /src/migrations /app/migrations
 
 EXPOSE 8080
-ENV ADDRESS=":8080"
 ENTRYPOINT ["/app/app"]

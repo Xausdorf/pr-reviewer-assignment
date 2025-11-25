@@ -17,6 +17,8 @@ import (
 	pg "github.com/Xausdorf/pr-reviewer-assignment/pkg/postgres"
 )
 
+const defaultAddr = ":8080"
+
 func main() {
 	logger := log.New()
 	logger.SetFormatter(&log.TextFormatter{FullTimestamp: true})
@@ -62,18 +64,13 @@ func main() {
 	server := gwhttp.NewServer(prUseCase, teamUseCase, userUseCase, logger)
 	handler := gwhttp.Handler(server)
 
-	addr := ":8080"
-	if a := os.Getenv("ADDRESS"); a != "" {
-		addr = a
-	}
-
 	httpServer := &http.Server{
-		Addr:    addr,
+		Addr:    defaultAddr,
 		Handler: handler,
 	}
 
 	go func() {
-		logger.WithField("addr", addr).Info("starting server")
+		logger.WithField("addr", httpServer.Addr).Info("starting server")
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.WithError(err).Fatal("http server failed")
 		}
