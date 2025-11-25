@@ -17,7 +17,18 @@ import (
 	pg "github.com/Xausdorf/pr-reviewer-assignment/pkg/postgres"
 )
 
-const defaultAddr = ":8080"
+const (
+	defaultAddr              = ":8080"
+	defaultReadHeaderTimeout = 1 * time.Second
+	defaultReadTimeout       = 5 * time.Second
+	defaultWriteTimeout      = 5 * time.Second
+	defaultShutdownTimeout   = 10 * time.Second
+
+	defaultDBMaxConns          = 10
+	defaultDBMinConns          = 1
+	defaultDBPingTimeout       = 5 * time.Second
+	defaultDBHealthCheckPeriod = 10 * time.Second
+)
 
 func main() {
 	logger := log.New()
@@ -44,7 +55,14 @@ func main() {
 		logger.WithError(err).Fatal("migrations failed")
 	}
 
-	pool, err := pg.NewPool(ctx, pg.Config{ConnString: dbURL}, logger)
+	pgCfg := pg.Config{
+		ConnString:        dbURL,
+		MaxConns:          defaultDBMaxConns,
+		MinConns:          defaultDBMinConns,
+		HealthCheckPeriod: defaultDBHealthCheckPeriod,
+		PingTimeout:       defaultDBPingTimeout,
+	}
+	pool, err := pg.NewPool(ctx, pgCfg, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("failed to connect to db")
 	}
@@ -65,8 +83,11 @@ func main() {
 	handler := gwhttp.Handler(server)
 
 	httpServer := &http.Server{
-		Addr:    defaultAddr,
-		Handler: handler,
+		Addr:              defaultAddr,
+		Handler:           handler,
+		ReadTimeout:       defaultReadTimeout,
+		WriteTimeout:      defaultWriteTimeout,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
 	}
 
 	go func() {
@@ -81,7 +102,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Info("shutting down")
-	ctxShut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctxShut, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
 	defer cancel()
 	if err := httpServer.Shutdown(ctxShut); err != nil {
 		logger.WithError(err).Error("error during shutdown")

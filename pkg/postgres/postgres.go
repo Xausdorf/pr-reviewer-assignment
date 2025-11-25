@@ -8,10 +8,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const defaultPingTimeout = 5 * time.Second
+
 type Config struct {
-	ConnString string
-	MaxConns   int
-	MinConns   int
+	ConnString        string
+	MaxConns          int32
+	MinConns          int32
+	HealthCheckPeriod time.Duration
+	PingTimeout       time.Duration
 }
 
 func NewPool(ctx context.Context, cfg Config, logger *log.Logger) (*pgxpool.Pool, error) {
@@ -21,13 +25,14 @@ func NewPool(ctx context.Context, cfg Config, logger *log.Logger) (*pgxpool.Pool
 		return nil, err
 	}
 	if cfg.MaxConns > 0 {
-		config.MaxConns = int32(cfg.MaxConns)
+		config.MaxConns = cfg.MaxConns
 	}
 	if cfg.MinConns > 0 {
-		config.MinConns = int32(cfg.MinConns)
+		config.MinConns = cfg.MinConns
 	}
-
-	config.HealthCheckPeriod = 5 * time.Second
+	if cfg.HealthCheckPeriod != 0 {
+		config.HealthCheckPeriod = cfg.HealthCheckPeriod
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -35,7 +40,11 @@ func NewPool(ctx context.Context, cfg Config, logger *log.Logger) (*pgxpool.Pool
 		return nil, err
 	}
 
-	ctxPing, cancel := context.WithTimeout(ctx, 5*time.Second)
+	pingTimeout := defaultPingTimeout
+	if cfg.PingTimeout != 0 {
+		pingTimeout = cfg.PingTimeout
+	}
+	ctxPing, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
 	logger.WithField("component", "postgres").Info("Pinging postgres")
 	if err := pool.Ping(ctxPing); err != nil {
