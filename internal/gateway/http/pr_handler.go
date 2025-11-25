@@ -54,7 +54,12 @@ func (s *Server) PostPullRequestCreate(w nethttp.ResponseWriter, r *nethttp.Requ
 	}
 
 	if body.AuthorId == "" || body.PullRequestId == "" || body.PullRequestName == "" {
-		s.writeError(w, nethttp.StatusBadRequest, NOTFOUND, "author_id, pull_request_id and pull_request_name are required")
+		s.writeError(
+			w,
+			nethttp.StatusBadRequest,
+			NOTFOUND,
+			"author_id, pull_request_id and pull_request_name are required",
+		)
 		return
 	}
 
