@@ -33,14 +33,6 @@ fmt: ## go fmt
 linter-golangci: ### check by golangci linter
 	golangci-lint run
 
-.PHONY: migrate-up
-migrate-up: ### migration up using DATABASE_URL
-	migrate -path migrations -database '$(DATABASE_URL)' up
-
-.PHONY: migrate-down
-migrate-down: ### migration down using DATABASE_URL
-	echo "y" | migrate -path migrations -database '$(DATABASE_URL)' down
-
 .PHONY: test
 test: ### run tests
 	go test -v ./...
